@@ -1,20 +1,24 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Dynamic Weather WDC</title>
+  <title>Weather.gov WDC</title>
   <script src="https://cdn.jsdelivr.net/npm/tableauwdc@2.3.0/dist/tableauwdc.min.js"></script>
 </head>
 <body>
-  <h2>Weather Data Connector</h2>
+  <h2>Weather.gov Tableau Connector</h2>
+
   <label>Enter City:</label>
   <input type="text" id="city" value="Dallas">
+  <label>State (2-letter):</label>
+  <input type="text" id="state" value="TX">
   <button onclick="getWeather()">Get Weather</button>
 
   <script>
     function getWeather() {
       const city = document.getElementById("city").value;
-      tableau.connectionData = JSON.stringify({ city });
-      tableau.connectionName = `Weather for ${city}`;
+      const state = document.getElementById("state").value;
+      tableau.connectionData = JSON.stringify({ city, state });
+      tableau.connectionName = `Weather.gov Data for ${city}, ${state}`;
       tableau.submit();
     }
 
@@ -24,35 +28,57 @@
       myConnector.getSchema = function (schemaCallback) {
         const cols = [
           { id: "city", dataType: tableau.dataTypeEnum.string },
-          { id: "temperature", dataType: tableau.dataTypeEnum.float },
-          { id: "humidity", dataType: tableau.dataTypeEnum.float },
-          { id: "description", dataType: tableau.dataTypeEnum.string }
+          { id: "state", dataType: tableau.dataTypeEnum.string },
+          { id: "period", dataType: tableau.dataTypeEnum.string },
+          { id: "temp", dataType: tableau.dataTypeEnum.string },
+          { id: "shortForecast", dataType: tableau.dataTypeEnum.string },
+          { id: "detailedForecast", dataType: tableau.dataTypeEnum.string }
         ];
         schemaCallback([{
-          id: "weatherData",
-          alias: "Weather Info",
+          id: "weatherGovData",
+          alias: "Weather.gov Forecast",
           columns: cols
         }]);
       };
 
-      myConnector.getData = function (table, doneCallback) {
-        const data = JSON.parse(tableau.connectionData);
-        const API_KEY = "YOUR_API_KEY"; // Replace with your OpenWeatherMap API Key
-        const city = data.city;
-        const url = `https://api.openweathermap.org/data/2.5/weather?q=${city}&appid=${API_KEY}&units=imperial`;
+      myConnector.getData = async function (table, doneCallback) {
+        const { city, state } = JSON.parse(tableau.connectionData);
+        const geoURL = `https://nominatim.openstreetmap.org/search?city=${city}&state=${state}&format=json&limit=1`;
 
-        fetch(url)
-          .then(response => response.json())
-          .then(json => {
-            const row = {
-              city: json.name,
-              temperature: json.main.temp,
-              humidity: json.main.humidity,
-              description: json.weather[0].description
-            };
-            table.appendRows([row]);
+        try {
+          const geoRes = await fetch(geoURL);
+          const geoData = await geoRes.json();
+
+          if (!geoData.length) {
+            alert("City/State not found.");
             doneCallback();
-          });
+            return;
+          }
+
+          const { lat, lon } = geoData[0];
+          const pointsURL = `https://api.weather.gov/points/${lat},${lon}`;
+          const pointsRes = await fetch(pointsURL);
+          const pointsData = await pointsRes.json();
+          const forecastURL = pointsData.properties.forecast;
+
+          const forecastRes = await fetch(forecastURL);
+          const forecastData = await forecastRes.json();
+
+          const periods = forecastData.properties.periods.map(p => ({
+            city,
+            state,
+            period: p.name,
+            temp: `${p.temperature} ${p.temperatureUnit}`,
+            shortForecast: p.shortForecast,
+            detailedForecast: p.detailedForecast
+          }));
+
+          table.appendRows(periods);
+        } catch (err) {
+          console.error("Error fetching weather data", err);
+        }
+
+        doneCallback();
       };
 
       tableau.registerConnector(myConnector);
@@ -60,4 +86,3 @@
   </script>
 </body>
 </html>
-
